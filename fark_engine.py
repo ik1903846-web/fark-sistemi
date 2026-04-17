@@ -1,5 +1,7 @@
 import pandas as pd
 import io
+import zipfile
+import xml.etree.ElementTree as ET
 
 ELENEN_SEKTORLER = ['holding', 'gayrimenkul yat', 'portföy', 'yatırım ortaklığı', 'menkul kıymet', 'girişim sermayesi']
 
@@ -39,21 +41,16 @@ KARAR_BG = {
     'ZAYIF': '#FFE0B2',
     'ELENDİ': '#FFCDD2',
 }
+
 def read_excel_bytes(file_bytes):
     try:
-        import zipfile, io
-        import xml.etree.ElementTree as ET
-        
         data = {}
         header = None
-        
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
             with z.open('xl/worksheets/sheet1.xml') as f:
                 content = f.read()
-        
         root = ET.fromstring(content)
         ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-        
         for row in root.iter(f'{{{ns}}}row'):
             row_vals = {}
             for c in row.iter(f'{{{ns}}}c'):
@@ -67,36 +64,29 @@ def read_excel_bytes(file_bytes):
                     v_el = c.find(f'{{{ns}}}v')
                     val = v_el.text if v_el is not None else ''
                 row_vals[col] = val if val else ''
-            
             if not row_vals: continue
-            
-            cols = sorted(row_vals.keys())
+            cols = sorted(row_vals.keys(), key=lambda x: (len(x), x))
             row_list = [row_vals.get(c, '') for c in cols]
-            
             if not header:
                 if row_list and row_list[0] == 'Kod':
                     header = row_list
                 continue
-            
             if not row_list or not row_list[0]: continue
             kod = row_list[0].strip()
             if not kod or kod == 'nan': continue
-            
             row_dict = {}
             for i, col_name in enumerate(header):
                 row_dict[col_name] = row_list[i] if i < len(row_list) else ''
             data[kod] = row_dict
-        
         return data
-    except Exception as e:
+    except:
         return {}
-
-
 
 def donem_from_filename(filename):
     name = filename.replace('Puanlama_Analizi_Tu_mu__','').replace('.xlsx','').replace('__1_','').replace('_1_','').strip()
     if name.isdigit() and len(name) == 6: return name
     return None
+
 class FARKEngine:
     def __init__(self, quarters_data):
         self.quarters = quarters_data
@@ -138,12 +128,12 @@ class FARKEngine:
         if len(son4_nk) < 4: return True, 'Yetersiz veri'
         if not all(x < 0 for x in son4_nk): return True, 'NK en az 1 çeyrekte pozitif ✓'
         if len(son4_fk) >= 2 and all(x < 0 for x in son4_fk[-2:]):
-            return False, 'FK+NK son 2 çeyrekte negatif (gerçek zarar) ✗'
-        return True, 'NK negatif ama FK pozitif (TMS 29 etkisi) ✓'
+            return False, 'FK+NK son 2 çeyrekte negatif ✗'
+        return True, 'NK negatif ama FK pozitif (TMS 29) ✓'
+
     def hesapla_puan(self, kod):
         son = self.son_data.get(kod, {})
         if not son: return None, {}
-
         fk_son = safe_float(son.get('Esas Faaliyet Karı /Zararı Net (Yıllık)', ''))
         nk_son = safe_float(son.get('Net Dönem Karı / Zararı (Yıllık)', ''))
         marj   = safe_float(son.get('Esas Faaliyet Kar Marjı (Yıllık)', ''))
@@ -153,26 +143,20 @@ class FARKEngine:
         pd_val = safe_float(son.get('Piyasa Değeri', ''))
         sektor = son.get('Hisse Sektör', '')
         fkpd   = (fk_son/pd_val*100) if fk_son and pd_val and pd_val>0 and fk_son>0 else None
-
         fk_seri, nk_seri, pd_seri = [], [], []
         for d in self.sorted_donems:
             row = self.quarters[d].get(kod, {})
             fk_seri.append(safe_float(row.get('Esas Faaliyet Karı /Zararı Net (Yıllık)', '')))
             nk_seri.append(safe_float(row.get('Net Dönem Karı / Zararı (Yıllık)', '')))
             pd_seri.append(safe_float(row.get('Piyasa Değeri', '')))
-
         f1_gec, f1_msg = self.f1_check(sektor, fk_seri)
         if not f1_gec: return 'F1', {'msg': f1_msg, 'sektor': sektor}
-
         f2_gec, f2_msg = self.f2_check(fk_seri)
         if not f2_gec: return 'F2', {'msg': f2_msg, 'sektor': sektor}
-
         f3_gec, f3_msg = self.f3_check(fk_seri, fk_son, pddd, fkpd)
         if not f3_gec: return 'F3', {'msg': f3_msg, 'sektor': sektor}
-
         f4_gec, f4_msg = self.f4_check(fk_seri, nk_seri)
         if not f4_gec: return 'F4', {'msg': f4_msg, 'sektor': sektor}
-
         eski_idx = max(0, len(fk_seri)-9)
         fk_eski = next((fk_seri[i] for i in range(eski_idx, min(eski_idx+3, len(fk_seri)))
                         if fk_seri[i] and fk_seri[i]>0), None)
@@ -185,7 +169,6 @@ class FARKEngine:
         elif buyume_pct >= 100: a += 3
         elif buyume_pct >= 50: a += 1
         a = min(a, 35)
-
         b = 0
         if pddd:
             if pddd<1: b+=12
@@ -202,7 +185,6 @@ class FARKEngine:
             if r<5: b+=10
             elif r<15: b+=3
         b = min(b, 48)
-
         c = 0
         if marj:
             if marj>20: c+=10
@@ -218,7 +200,6 @@ class FARKEngine:
         elif fk_son and fk_son>0: c+=1
         if nakit and nakit>0: c+=7
         c = min(c, 25)
-
         d = 0
         s = sektor.lower()
         if any(x in s for x in ['finans','faktoring','tasarruf','sigorta','enerji','sağlık','ilaç','su','elektrik','savunma','iletişim']):
@@ -234,15 +215,14 @@ class FARKEngine:
             if bode<100: d+=5
             elif bode<300: d+=3
         d = min(d, 20)
-
         toplam = round(a+b+c+d, 1)
-
         return toplam, {
             'sektor': sektor, 'fk': fk_son, 'nk': nk_son, 'pd': pd_val,
             'pddd': pddd, 'marj': marj, 'fkpd': fkpd, 'nakit': nakit,
             'buyume_pct': buyume_pct, 'A': a, 'B': b, 'C': c, 'D': d,
             'f1_msg': f1_msg, 'f2_msg': f2_msg, 'f3_msg': f3_msg, 'f4_msg': f4_msg,
         }
+
     def tara(self):
         sonuclar, elendi = [], {'F1':[], 'F2':[], 'F3':[], 'F4':[]}
         for kod in sorted(self.son_data.keys()):
@@ -271,7 +251,7 @@ class FARKEngine:
         puan, detay = self.hesapla_puan(kod)
         uyarilar = []
         if puan in ['F1','F2','F3','F4']:
-            uyarilar.append(f'🚨 {puan} filtresinde elendi: {detay.get("msg","")}')
+            uyarilar.append(f'🚨 {puan} filtresinde elendi')
             return uyarilar, None
         if puan is None:
             uyarilar.append('⚠️ Veri bulunamadı')
