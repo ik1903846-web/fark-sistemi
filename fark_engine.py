@@ -1,9 +1,33 @@
 import pandas as pd
 import io
 import zipfile
-import xml.etree.ElementTree as ET
 
 ELENEN_SEKTORLER = ['holding', 'gayrimenkul yat', 'portföy', 'yatırım ortaklığı', 'menkul kıymet', 'girişim sermayesi']
+
+MINIMAL_STYLES = b'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+</styleSheet>'''
+
+def fix_xlsx_styles(file_bytes):
+    """Fastweb xlsx dosyalarındaki bozuk styles.xml sorununu çözer."""
+    try:
+        buf_in = io.BytesIO(file_bytes)
+        buf_out = io.BytesIO()
+        with zipfile.ZipFile(buf_in, 'r') as zin:
+            with zipfile.ZipFile(buf_out, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = zin.read(item.filename)
+                    if item.filename == 'xl/styles.xml':
+                        data = MINIMAL_STYLES
+                    zout.writestr(item, data)
+        return buf_out.getvalue()
+    except Exception:
+        return file_bytes  # fix başarısız olursa orijinali dene
 
 def safe_float(val):
     try: return float(str(val).replace(',', '.'))
@@ -43,44 +67,27 @@ KARAR_BG = {
 }
 
 def read_excel_bytes(file_bytes):
+    # Önce styles fix uygula (Fastweb xlsx uyumluluk)
+    file_bytes = fix_xlsx_styles(file_bytes)
     try:
-        data = {}
-        header = None
-        with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
-            with z.open('xl/worksheets/sheet1.xml') as f:
-                content = f.read()
-        root = ET.fromstring(content)
-        ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-        for row in root.iter(f'{{{ns}}}row'):
-            row_vals = {}
-            for c in row.iter(f'{{{ns}}}c'):
-                ref = c.get('r', '')
-                col = ''.join(filter(str.isalpha, ref))
-                t = c.get('t', '')
-                if t == 'inlineStr':
-                    t_el = c.find(f'{{{ns}}}is/{{{ns}}}t')
-                    val = t_el.text if t_el is not None else ''
-                else:
-                    v_el = c.find(f'{{{ns}}}v')
-                    val = v_el.text if v_el is not None else ''
-                row_vals[col] = val if val else ''
-            if not row_vals: continue
-            cols = sorted(row_vals.keys(), key=lambda x: (len(x), x))
-            row_list = [row_vals.get(c, '') for c in cols]
-            if not header:
-                if row_list and row_list[0] == 'Kod':
-                    header = row_list
-                continue
-            if not row_list or not row_list[0]: continue
-            kod = row_list[0].strip()
-            if not kod or kod == 'nan': continue
-            row_dict = {}
-            for i, col_name in enumerate(header):
-                row_dict[col_name] = row_list[i] if i < len(row_list) else ''
-            data[kod] = row_dict
-        return data
-    except:
-        return {}
+        df = pd.read_excel(io.BytesIO(file_bytes), header=None, engine='openpyxl')
+    except Exception:
+        try:
+            df = pd.read_excel(io.BytesIO(file_bytes), header=None)
+        except Exception:
+            return {}
+    data = {}
+    header = None
+    for _, row in df.iterrows():
+        row_list = [str(v).strip() if pd.notna(v) else '' for v in row]
+        if row_list and row_list[0] == 'Kod':
+            header = row_list
+            continue
+        if header and len(row_list) >= 2 and row_list[0]:
+            row_dict = {header[i]: row_list[i] if i < len(row_list) else '' for i in range(len(header))}
+            kod = row_dict.get('Kod', '').strip()
+            if kod and kod != 'nan': data[kod] = row_dict
+    return data
 
 def donem_from_filename(filename):
     name = filename.replace('Puanlama_Analizi_Tu_mu__','').replace('.xlsx','').replace('__1_','').replace('_1_','').strip()
@@ -128,12 +135,13 @@ class FARKEngine:
         if len(son4_nk) < 4: return True, 'Yetersiz veri'
         if not all(x < 0 for x in son4_nk): return True, 'NK en az 1 çeyrekte pozitif ✓'
         if len(son4_fk) >= 2 and all(x < 0 for x in son4_fk[-2:]):
-            return False, 'FK+NK son 2 çeyrekte negatif ✗'
-        return True, 'NK negatif ama FK pozitif (TMS 29) ✓'
+            return False, 'FK+NK son 2 çeyrekte negatif (gerçek zarar) ✗'
+        return True, 'NK negatif ama FK pozitif (TMS 29 etkisi) ✓'
 
     def hesapla_puan(self, kod):
         son = self.son_data.get(kod, {})
         if not son: return None, {}
+
         fk_son = safe_float(son.get('Esas Faaliyet Karı /Zararı Net (Yıllık)', ''))
         nk_son = safe_float(son.get('Net Dönem Karı / Zararı (Yıllık)', ''))
         marj   = safe_float(son.get('Esas Faaliyet Kar Marjı (Yıllık)', ''))
@@ -143,24 +151,32 @@ class FARKEngine:
         pd_val = safe_float(son.get('Piyasa Değeri', ''))
         sektor = son.get('Hisse Sektör', '')
         fkpd   = (fk_son/pd_val*100) if fk_son and pd_val and pd_val>0 and fk_son>0 else None
+
         fk_seri, nk_seri, pd_seri = [], [], []
         for d in self.sorted_donems:
             row = self.quarters[d].get(kod, {})
             fk_seri.append(safe_float(row.get('Esas Faaliyet Karı /Zararı Net (Yıllık)', '')))
             nk_seri.append(safe_float(row.get('Net Dönem Karı / Zararı (Yıllık)', '')))
             pd_seri.append(safe_float(row.get('Piyasa Değeri', '')))
+
         f1_gec, f1_msg = self.f1_check(sektor, fk_seri)
         if not f1_gec: return 'F1', {'msg': f1_msg, 'sektor': sektor}
+
         f2_gec, f2_msg = self.f2_check(fk_seri)
         if not f2_gec: return 'F2', {'msg': f2_msg, 'sektor': sektor}
+
         f3_gec, f3_msg = self.f3_check(fk_seri, fk_son, pddd, fkpd)
         if not f3_gec: return 'F3', {'msg': f3_msg, 'sektor': sektor}
+
         f4_gec, f4_msg = self.f4_check(fk_seri, nk_seri)
         if not f4_gec: return 'F4', {'msg': f4_msg, 'sektor': sektor}
+
         eski_idx = max(0, len(fk_seri)-9)
         fk_eski = next((fk_seri[i] for i in range(eski_idx, min(eski_idx+3, len(fk_seri)))
                         if fk_seri[i] and fk_seri[i]>0), None)
         buyume_pct = ((fk_son-fk_eski)/abs(fk_eski)*100) if fk_eski and fk_son and fk_son>0 else 0
+
+        # A
         buyuyen = sum(1 for i in range(1,len(fk_seri))
                       if fk_seri[i-1] and fk_seri[i] and fk_seri[i-1]>0 and fk_seri[i]>fk_seri[i-1])
         br = buyuyen / (len(fk_seri)-1 or 1)
@@ -169,6 +185,8 @@ class FARKEngine:
         elif buyume_pct >= 100: a += 3
         elif buyume_pct >= 50: a += 1
         a = min(a, 35)
+
+        # B
         b = 0
         if pddd:
             if pddd<1: b+=12
@@ -185,6 +203,8 @@ class FARKEngine:
             if r<5: b+=10
             elif r<15: b+=3
         b = min(b, 48)
+
+        # C
         c = 0
         if marj:
             if marj>20: c+=10
@@ -200,6 +220,8 @@ class FARKEngine:
         elif fk_son and fk_son>0: c+=1
         if nakit and nakit>0: c+=7
         c = min(c, 25)
+
+        # D
         d = 0
         s = sektor.lower()
         if any(x in s for x in ['finans','faktoring','tasarruf','sigorta','enerji','sağlık','ilaç','su','elektrik','savunma','iletişim']):
@@ -215,7 +237,9 @@ class FARKEngine:
             if bode<100: d+=5
             elif bode<300: d+=3
         d = min(d, 20)
+
         toplam = round(a+b+c+d, 1)
+
         return toplam, {
             'sektor': sektor, 'fk': fk_son, 'nk': nk_son, 'pd': pd_val,
             'pddd': pddd, 'marj': marj, 'fkpd': fkpd, 'nakit': nakit,
@@ -240,7 +264,7 @@ class FARKEngine:
                     'PD/DD': f"{detay['pddd']:.1f}" if detay.get('pddd') else '-',
                     'FK/PD%': f"{oran:.1f}" if oran else '-',
                     'Marj%': f"{detay['marj']:.1f}" if detay.get('marj') else '-',
-                    'Büyüme%': f"+{detay['buyume_pct']:.0f}" if detay.get('buyume_pct') else '-',
+                    'Büyüme%': f"+{detay['buyume_pct']:.0f}" if detay.get('buyume_pct','')!='' else '-',
                     '_fk_raw': detay.get('fk'), '_pd_raw': detay.get('pd'),
                     '_oran_raw': oran,
                 })
@@ -251,7 +275,7 @@ class FARKEngine:
         puan, detay = self.hesapla_puan(kod)
         uyarilar = []
         if puan in ['F1','F2','F3','F4']:
-            uyarilar.append(f'🚨 {puan} filtresinde elendi')
+            uyarilar.append(f'🚨 {puan} filtresinde elendi: {detay.get("msg","")}')
             return uyarilar, None
         if puan is None:
             uyarilar.append('⚠️ Veri bulunamadı')
@@ -260,6 +284,6 @@ class FARKEngine:
             uyarilar.append(f'📉 Puan düştü: {onceki_puan:.0f} → {puan:.0f}')
         if detay.get('fk') and detay['fk'] < 0:
             uyarilar.append('⚠️ Faaliyet karı negatife döndü')
-        if isinstance(detay.get('buyume_pct'), (int,float)) and detay['buyume_pct'] < 0:
+        if detay.get('buyume_pct','') != '' and isinstance(detay.get('buyume_pct'), (int,float)) and detay['buyume_pct'] < 0:
             uyarilar.append(f'📉 FK büyümesi negatif: {detay["buyume_pct"]:.0f}%')
         return uyarilar, puan
