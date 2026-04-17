@@ -42,23 +42,30 @@ KARAR_BG = {
 def read_excel_bytes(file_bytes):
     try:
         df = pd.read_excel(io.BytesIO(file_bytes), header=None, engine='openpyxl')
-    except:
-        try:
-            df = pd.read_excel(io.BytesIO(file_bytes), header=None)
-        except:
-            return {}
-    data = {}
-    header = None
-    for _, row in df.iterrows():
-        row_list = [str(v).strip() if pd.notna(v) else '' for v in row]
-        if row_list and row_list[0] == 'Kod':
-            header = row_list
-            continue
-        if header and len(row_list) >= 2 and row_list[0]:
-            row_dict = {header[i]: row_list[i] if i < len(row_list) else '' for i in range(len(header))}
-            kod = row_dict.get('Kod', '').strip()
-            if kod and kod != 'nan': data[kod] = row_dict
-    return data
+        data = {}
+        header = None
+        for idx in range(len(df)):
+            row = df.iloc[idx]
+            row_list = []
+            for v in row:
+                if pd.isna(v): row_list.append('')
+                else: row_list.append(str(v).strip())
+            if not row_list: continue
+            if row_list[0] == 'Kod':
+                header = row_list
+                continue
+            if header is None: continue
+            if not row_list[0] or row_list[0] == 'nan': continue
+            row_dict = {}
+            for i in range(len(header)):
+                row_dict[header[i]] = row_list[i] if i < len(row_list) else ''
+            kod = row_dict.get('Kod','').strip()
+            if kod and kod != 'nan':
+                data[kod] = row_dict
+        return data
+    except Exception as e:
+        return {}
+
 
 def donem_from_filename(filename):
     name = filename.replace('Puanlama_Analizi_Tu_mu__','').replace('.xlsx','').replace('__1_','').replace('_1_','').strip()
