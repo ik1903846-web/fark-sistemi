@@ -531,7 +531,9 @@ Her çeyrek sonunda yeni dönem Excel'ini indirip sisteme yükle.
             st.success(f"**{len(donems)} dönem yüklü**")
             st.write(f"İlk dönem: {donems[0][:4]}/{donems[0][4:]}")
             st.write(f"Son dönem: {donems[-1][:4]}/{donems[-1][4:]}")
-            st.write(f"Toplam hisse (son dönem): {len(st.session_state.son_data or {})}")
+            engine = st.session_state.get('engine')
+            son_data_count = len(engine.son_data) if engine else 0
+            st.write(f"Toplam hisse (son d\u00f6nem): {son_data_count}")
         else:
             st.warning("Henüz veri yüklenmedi")
 
