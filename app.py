@@ -100,11 +100,17 @@ if page == "🔍 Scanner":
                 if st.button("🚀 Taramayı Başlat", type="primary", use_container_width=True):
                     with st.spinner("Veriler işleniyor..."):
                         quarters = {}
+                        hatalar = []
                         for f in uploaded:
                             donem = donem_from_filename(f.name)
                             if donem:
                                 data = read_excel_bytes(f.read())
-                                if data: quarters[donem] = data
+                                if data:
+                                    quarters[donem] = data
+                                else:
+                                    hatalar.append(f"⚠️ `{f.name}` → dönem **{donem}** tanındı ama veri okunamadı")
+                            else:
+                                hatalar.append(f"⚠️ `{f.name}` → dosya adından dönem çıkarılamadı")
 
                         if quarters:
                             engine = FARKEngine(quarters)
@@ -118,7 +124,10 @@ if page == "🔍 Scanner":
                             st.success(f"✓ {len(quarters)} dönem yüklendi · {engine.son_donem} ana dönem · {len(results)} hisse geçti")
                             st.rerun()
                         else:
-                            st.error("Dosya formatı tanınamadı. Dosya adlarını kontrol et.")
+                            st.error("Hiçbir dosya yüklenemedi.")
+                            for h in hatalar:
+                                st.warning(h)
+                            st.info("💡 Beklenen format: `Puanlama_Analizi_Tu_mu__YYYYMM.xlsx`")
 
     # Sonuçlar
     if st.session_state.results is not None:
