@@ -311,55 +311,70 @@ if page == "\U0001f50d Scanner":
         st.markdown(f"<p style='font-size:12px;color:#475569;margin:8px 0'>{len(goster)} hisse g\u00f6steriliyor · D\u00f6nem: <b>{donem_fmt(son_donem)}</b></p>",
                      unsafe_allow_html=True)
 
-        # Tablo başlığı
-        st.markdown("""<div class='tbl-header'>
-          <span>KOD</span><span>SEKT\u00d6R</span><span>PUAN</span>
-          <span>A · B · C · D</span><span>FAAL.KARI</span>
-          <span>PİY.DEĞERİ</span><span>FK/PD%</span><span>TAKİP</span>
-        </div>""", unsafe_allow_html=True)
+        # ── Tablo başlık satırı ──
+        COL_W = [0.7, 0.5, 1.6, 0.8, 1.4, 0.9, 0.9, 0.8, 0.5]
+        hdr = st.columns(COL_W)
+        basliklar = ["KOD","TAKİP","SEKTÖR","PUAN","A · B · C · D","FAAL.KARI","PİY.DEĞ.","FK/PD%","BÜYÜME"]
+        for col, lbl in zip(hdr, basliklar):
+            col.markdown(f"<div style='font-size:10px;font-weight:700;color:#475569;"
+                         f"text-transform:uppercase;letter-spacing:.5px;padding:6px 2px;border-bottom:1px solid #1E3448'>"
+                         f"{lbl}</div>", unsafe_allow_html=True)
 
-        # Hisse satırları
+        # ── Hisse satırları ──
+        badge_map = {
+            'G\u00dc\u00c7L\u00dc ADAY': ('<span style="background:#14532D;color:#4ADE80;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">', '#4ADE80'),
+            'POTANS\u0130YEL':            ('<span style="background:#422006;color:#FCD34D;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">', '#FCD34D'),
+            'ZAYIF':                     ('<span style="background:#431407;color:#FB923C;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">', '#FB923C'),
+            'ELEND\u0130':               ('<span style="background:#450A0A;color:#F87171;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">', '#F87171'),
+        }
+
         for r in goster:
-            kod  = r['Kod']
-            puan = r['Puan']
-            kd   = r['Karar']
+            kod   = r['Kod']
+            puan  = r['Puan']
+            kd    = r['Karar']
             in_wl = kod in st.session_state.watchlist
-            oran_val = r.get('FK/PD%','-')
-            try: oran_hi = float(oran_val) > 10
-            except: oran_hi = False
+            oran_val = r.get('FK/PD%', '-')
+            buyume   = r.get('B\u00fcy\u00fcme%', '-')
+            badge_open, badge_clr = badge_map.get(kd, badge_map['ELEND\u0130'])
 
-            badge_map = {'G\u00dc\u00c7L\u00dc ADAY':'badge-guclu','POTANS\u0130YEL':'badge-pot',
-                         'ZAYIF':'badge-zayif','ELEND\u0130':'badge-elen'}
-            badge_cls = badge_map.get(kd,'badge-elen')
-            oran_cls  = 'oran-hi' if oran_hi else 'oran-lo'
-            buyume    = r.get('B\u00fcy\u00fcme%','-')
+            try: oran_clr = '#4ADE80' if float(oran_val) > 10 else '#94A3B8'
+            except: oran_clr = '#94A3B8'
 
-            st.markdown(f"""<div class='hisse-row'>
-              <span class='kod'>{kod}</span>
-              <span class='sek'>{r['Sekt\u00f6r']}</span>
-              <span><span class='{badge_cls}'>{puan:.0f}</span></span>
-              <span class='abcd'>A:{r['A']} · B:{r['B']} · C:{r['C']} · D:{r['D']}</span>
-              <span class='val'>{r['Faal.Kar\u0131']}</span>
-              <span class='val'>{r['Piy.De\u011feri']}</span>
-              <span class='{oran_cls}'>{oran_val}%</span>
-              <span></span>
-            </div>""", unsafe_allow_html=True)
+            row = st.columns(COL_W)
 
-            # Takip butonu (invisible column trick)
-            col_sp, col_btn = st.columns([11.2, 0.8])
-            with col_btn:
-                lbl = "\u2b50" if in_wl else "\u2606"
-                if st.button(lbl, key=f"wl_{kod}", help="Takip listesi"):
-                    if in_wl:
-                        del st.session_state.watchlist[kod]
-                    else:
-                        st.session_state.watchlist[kod] = {
-                            'puan':puan,'karar':kd,'sektor':r['Sekt\u00f6r'],
-                            'eklenme':datetime.now().strftime('%Y-%m-%d'),
-                            'eklenme_donemi':son_donem,
-                        }
-                        st.toast(f"\u2b50 {kod} eklendi!", icon="\u2705")
-                    st.rerun()
+            row[0].markdown(f"<div style='padding:8px 2px;font-weight:800;font-size:13px;color:#38BDF8'>{kod}</div>",
+                            unsafe_allow_html=True)
+
+            wl_lbl = "\u2b50" if in_wl else "\u2606"
+            if row[1].button(wl_lbl, key=f"wl_{kod}", help="Takip listesine ekle / \u00e7\u0131kar"):
+                if in_wl:
+                    del st.session_state.watchlist[kod]
+                else:
+                    st.session_state.watchlist[kod] = {
+                        'puan': puan, 'karar': kd, 'sektor': r['Sekt\u00f6r'],
+                        'eklenme': datetime.now().strftime('%Y-%m-%d'),
+                        'eklenme_donemi': son_donem,
+                    }
+                    st.toast(f"\u2b50 {kod} eklendi!", icon="\u2705")
+                st.rerun()
+
+            row[2].markdown(f"<div style='padding:8px 2px;font-size:11px;color:#64748B'>{r['Sekt\u00f6r']}</div>",
+                            unsafe_allow_html=True)
+            row[3].markdown(f"<div style='padding:8px 2px'>{badge_open}{puan:.0f}</span></div>",
+                            unsafe_allow_html=True)
+            row[4].markdown(f"<div style='padding:8px 2px;font-size:11px;color:#94A3B8'>A:{r['A']} · B:{r['B']} · C:{r['C']} · D:{r['D']}</div>",
+                            unsafe_allow_html=True)
+            row[5].markdown(f"<div style='padding:8px 2px;font-size:12px;color:#CBD5E1'>{r['Faal.Kar\u0131']}</div>",
+                            unsafe_allow_html=True)
+            row[6].markdown(f"<div style='padding:8px 2px;font-size:12px;color:#CBD5E1'>{r['Piy.De\u011feri']}</div>",
+                            unsafe_allow_html=True)
+            row[7].markdown(f"<div style='padding:8px 2px;font-size:12px;color:{oran_clr};font-weight:700'>{oran_val}%</div>",
+                            unsafe_allow_html=True)
+            row[8].markdown(f"<div style='padding:8px 2px;font-size:12px;color:#64748B'>{buyume}</div>",
+                            unsafe_allow_html=True)
+
+            st.markdown("<div style='border-bottom:1px solid #0F1923;margin:0'></div>",
+                        unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         with st.expander(f"\u274c Elenen Hisseler ({toplam_elen})"):
