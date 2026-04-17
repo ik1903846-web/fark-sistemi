@@ -287,3 +287,4 @@ class FARKEngine:
         if detay.get('buyume_pct','') != '' and isinstance(detay.get('buyume_pct'), (int,float)) and detay['buyume_pct'] < 0:
             uyarilar.append(f'📉 FK büyümesi negatif: {detay["buyume_pct"]:.0f}%')
         return uyarilar, puan
+ü
