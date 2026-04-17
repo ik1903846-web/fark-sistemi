@@ -41,30 +41,56 @@ KARAR_BG = {
 }
 def read_excel_bytes(file_bytes):
     try:
-        df = pd.read_excel(io.BytesIO(file_bytes), header=None, engine='openpyxl')
+        import zipfile, io
+        import xml.etree.ElementTree as ET
+        
         data = {}
         header = None
-        for idx in range(len(df)):
-            row = df.iloc[idx]
-            row_list = []
-            for v in row:
-                if pd.isna(v): row_list.append('')
-                else: row_list.append(str(v).strip())
-            if not row_list: continue
-            if row_list[0] == 'Kod':
-                header = row_list
+        
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+            with z.open('xl/worksheets/sheet1.xml') as f:
+                content = f.read()
+        
+        root = ET.fromstring(content)
+        ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+        
+        for row in root.iter(f'{{{ns}}}row'):
+            row_vals = {}
+            for c in row.iter(f'{{{ns}}}c'):
+                ref = c.get('r', '')
+                col = ''.join(filter(str.isalpha, ref))
+                t = c.get('t', '')
+                if t == 'inlineStr':
+                    t_el = c.find(f'{{{ns}}}is/{{{ns}}}t')
+                    val = t_el.text if t_el is not None else ''
+                else:
+                    v_el = c.find(f'{{{ns}}}v')
+                    val = v_el.text if v_el is not None else ''
+                row_vals[col] = val if val else ''
+            
+            if not row_vals: continue
+            
+            cols = sorted(row_vals.keys())
+            row_list = [row_vals.get(c, '') for c in cols]
+            
+            if not header:
+                if row_list and row_list[0] == 'Kod':
+                    header = row_list
                 continue
-            if header is None: continue
-            if not row_list[0] or row_list[0] == 'nan': continue
+            
+            if not row_list or not row_list[0]: continue
+            kod = row_list[0].strip()
+            if not kod or kod == 'nan': continue
+            
             row_dict = {}
-            for i in range(len(header)):
-                row_dict[header[i]] = row_list[i] if i < len(row_list) else ''
-            kod = row_dict.get('Kod','').strip()
-            if kod and kod != 'nan':
-                data[kod] = row_dict
+            for i, col_name in enumerate(header):
+                row_dict[col_name] = row_list[i] if i < len(row_list) else ''
+            data[kod] = row_dict
+        
         return data
     except Exception as e:
         return {}
+
 
 
 def donem_from_filename(filename):
